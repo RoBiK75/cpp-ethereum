@@ -58,6 +58,7 @@ private:
 
 	volatile uint32_t ** m_search_buf;
 	cudaStream_t  * m_streams;
+	cudaEvent_t * m_events;
 
 	/// The local work size for the search
 	static unsigned s_blockSize;

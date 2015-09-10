@@ -217,6 +217,7 @@ bool ethash_cuda_miner::init(uint8_t const* _dag, uint64_t _dagSize, unsigned _d
 
 		m_search_buf = new volatile uint32_t *[s_numStreams];
 		m_streams = new cudaStream_t[s_numStreams];
+		m_events = new cudaEvent_t[s_numStreams];
 
 		uint32_t dagSize128 = (unsigned)(_dagSize / ETHASH_MIX_BYTES);
 
@@ -231,6 +232,7 @@ bool ethash_cuda_miner::init(uint8_t const* _dag, uint64_t _dagSize, unsigned _d
 		{
 			CUDA_SAFE_CALL(cudaMallocHost(&m_search_buf[i], SEARCH_RESULT_BUFFER_SIZE * sizeof(uint32_t)));
 			CUDA_SAFE_CALL(cudaStreamCreate(&m_streams[i]));
+			CUDA_SAFE_CALL(cudaEventCreateWithFlags(&m_events[i], cudaEventBlockingSync | cudaEventDisableTiming));
 		}
 		set_constants(dag, dagSize128);
 		memset(&m_current_header, 0, sizeof(hash32_t));
@@ -275,13 +277,15 @@ void ethash_cuda_miner::search(uint8_t const* header, uint64_t target, search_ho
 	{
 		unsigned int stream_index = m_current_index % s_numStreams;
 		cudaStream_t stream = m_streams[stream_index];
+		cudaEvent_t event = m_events[stream_index];
 		volatile uint32_t* buffer = m_search_buf[stream_index];
 		uint32_t found_count = 0;
 		uint64_t nonces[SEARCH_RESULT_BUFFER_SIZE - 1];
 		uint64_t nonce_base = m_current_nonce - s_numStreams * batch_size;
 		if (m_current_index >= s_numStreams)
 		{
-			CUDA_SAFE_CALL(cudaStreamSynchronize(stream));
+			//CUDA_SAFE_CALL(cudaStreamSynchronize(stream));
+			CUDA_SAFE_CALL(cudaEventSynchronize(event));
 			found_count = buffer[0];
 			if (found_count)
 				buffer[0] = 0;
@@ -289,6 +293,7 @@ void ethash_cuda_miner::search(uint8_t const* header, uint64_t target, search_ho
 				nonces[j] = nonce_base + buffer[j + 1];
 		}
 		run_ethash_search(s_gridSize, s_blockSize, stream, buffer, m_current_nonce);
+		CUDA_SAFE_CALL(cudaEventRecord(event, stream));
 		if (m_current_index >= s_numStreams)
 		{
 			exit = found_count && hook.found(nonces, found_count);
